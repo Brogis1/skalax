@@ -194,6 +194,7 @@ Below more comprehensive benchmarks are presented.
 ## Benchmarks
 
 We provide a few important tests to check the correctness of the implementation.
+Beware that the performance can be affected (positively or negatively) by the JAX PySCF wrapper I included, hence the non-perfect match with the PyTorch reference implementation.
 
 ### Forward pass equivalence
 
@@ -208,6 +209,8 @@ The non-parallelity error (NPE) is crucial for correcness of a prediction in che
 ![CH4 symmetric stretch: total energy vs C–H distance (PyTorch vs JAX) and non-parallelity error](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/ch4_stretch.png)
 
 ![H2 dissociation curve: total energy vs H–H distance (PyTorch vs JAX) and absolute energy difference](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/reaction_curve.png)
+
+Qualitatively the results are neat considering that we used the same parameters and completely different backends (PyTorch vs JAX).
 
 ## Dependencies
 
