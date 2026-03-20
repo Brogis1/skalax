@@ -9,8 +9,10 @@ JAX/Equinox implementation of the [Skala](https://github.com/microsoft/skala) ne
 skalax is a pure JAX port of the Skala neural XC functional. It achieves **good numerical equivalence** with the PyTorch reference (~1 kcal/mol NPE for the tested systems) and unlocks JAX-native capabilities: `jax.grad`, `jax.jit`, `jax.vmap`, and full XLA compilation.
 
 The idea is to enable the use and finetuning of this functional in JAX-based DFT codes.
-Be warned, it is work in progress and so far has been tested on only on CPU.
-All bug pointers are welcome, so far
+
+> [!WARNING]
+> Work in progress — so far tested on CPU only. No guarantees are provided. Bug reports are very welcome!
+
 
 ### Performance
 
@@ -186,7 +188,19 @@ The JAX implementation is numerically equivalent to the PyTorch reference:
 | `get_exc` (with non-local) | 1.14e-13 Ha |
 | `get_exc_density` | 1.17e-13 Ha |
 
+
+## Benchmarks
+
+We provide a few important tests to check the correctness of the implementation.
+
+### Forward pass equivalence
+
 ![Forward pass equivalence: relative error on total XC energy and max absolute error on per-point XC density, both well below threshold across system sizes](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/forward_equivalence.png)
+
+
+### Reaction curves
+
+The non-parallelity error (NPE) is crucial for correcness of the prediction (here we compare the JAX implementation with the PyTorch reference implementation).
 
 ![CH4 symmetric stretch: total energy vs C–H distance (PyTorch vs JAX) and non-parallelity error](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/ch4_stretch.png)
 
