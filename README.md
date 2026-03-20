@@ -1,6 +1,6 @@
 # skalax
 
-<img src="https://raw.githubusercontent.com/Brogis1/skalax/main/img/logo-skala.png" alt="Skalax Logo" width="400">
+<img src="https://raw.githubusercontent.com/Brogis1/skalax/main/img/logo-skala.png?v=2" alt="Skalax Logo" width="400">
 
 JAX/Equinox implementation of the [Skala](https://github.com/microsoft/skala) neural exchange-correlation functional for density functional theory (DFT) calculations.
 
