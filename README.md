@@ -19,7 +19,7 @@ The idea is to enable the use and finetuning of this functional in JAX-based DFT
 
 JAX JIT compilation (XLA) delivers comparable performance to PyTorch — and beats PyTorch at large grid sizes. All variants use `radius_cutoff=5.0` and are benchmarked in steady state (post-compilation, CPU). The considered benchmarks indicate even superior performance in JAX at large grid sizes. The next step would be to validate the performance on GPUs.
 
-![Performance benchmark](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/extensive_performance.png)
+![Performance benchmark](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/extensive_performance.png?v=2)
 
 > **Left:** Forward pass only. **Right:** Forward + backward.
 > JAX JIT forward is ~1.4× faster than PyTorch traced at 32k grid points on CPU;
