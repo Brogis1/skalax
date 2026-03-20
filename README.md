@@ -12,17 +12,18 @@ The idea is to enable the use and finetuning of this functional in JAX-based DFT
 
 > [!WARNING]
 > Work in progress — so far tested on CPU only. No guarantees are provided. Bug reports are very welcome!
+> The PySCF JAX wrapper is not optimal hence slower than original PySCF Skala in Torch but the model is rather similar in performance during training and inference.
 
 
 ### Performance
 
-JAX JIT compilation (XLA) delivers significant speedups over PyTorch eager — and beats PyTorch `torch.jit.trace` at large grid sizes. All variants use `radius_cutoff=5.0` and are benchmarked in steady state (post-compilation, CPU):
+JAX JIT compilation (XLA) delivers comparable performance to PyTorch — and beats PyTorch at large grid sizes. All variants use `radius_cutoff=5.0` and are benchmarked in steady state (post-compilation, CPU). The considered benchmarks indicate even superior performance in JAX at large grid sizes. The next step would be to validate the performance on GPUs.
 
 ![Performance benchmark](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/extensive_performance.png)
 
 > **Left:** Forward pass only. **Right:** Forward + backward.
-> JAX JIT forward is ~1.4× faster than PyTorch traced at 32k grid points;
-> JAX JIT fwd+grad is ~1.6× faster than PyTorch traced fwd+backward.
+> JAX JIT forward is ~1.4× faster than PyTorch traced at 32k grid points on CPU;
+> JAX JIT fwd+grad is ~1.6× faster than PyTorch traced fwd+backward on CPU.
 
 ## Installation
 
@@ -180,7 +181,7 @@ SkalaFunctional (~276,000 parameters)
 
 ## Numerical Equivalence
 
-The JAX implementation is numerically equivalent to the PyTorch reference:
+The JAX implementation is numerically equivalent to the PyTorch reference (few test cases):
 
 | Test | Max \|ΔE\| |
 |------|------------|
@@ -188,6 +189,7 @@ The JAX implementation is numerically equivalent to the PyTorch reference:
 | `get_exc` (with non-local) | 1.14e-13 Ha |
 | `get_exc_density` | 1.17e-13 Ha |
 
+Below more comprehensive benchmarks are presented.
 
 ## Benchmarks
 
@@ -195,12 +197,13 @@ We provide a few important tests to check the correctness of the implementation.
 
 ### Forward pass equivalence
 
+
 ![Forward pass equivalence: relative error on total XC energy and max absolute error on per-point XC density, both well below threshold across system sizes](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/forward_equivalence.png)
 
 
 ### Reaction curves
 
-The non-parallelity error (NPE) is crucial for correcness of the prediction (here we compare the JAX implementation with the PyTorch reference implementation).
+The non-parallelity error (NPE) is crucial for correcness of a prediction in chemistry. Here we compare the JAX implementation with the PyTorch reference implementation:
 
 ![CH4 symmetric stretch: total energy vs C–H distance (PyTorch vs JAX) and non-parallelity error](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/ch4_stretch.png)
 
@@ -208,13 +211,44 @@ The non-parallelity error (NPE) is crucial for correcness of the prediction (her
 
 ## Dependencies
 
-- `jax >= 0.4.0`, `jaxlib >= 0.4.0`
-- `equinox >= 0.11.0`
-- `e3nn-jax >= 0.20.0`
-- `numpy >= 1.21.0`
-- `skala >= 1.0.0` (PyTorch reference; brings in `pyscf`, `dftd3`, `torch`)
+### Tested versions
 
-For a lightweight install without `skala` (no Fortran needed), use `pip install --no-deps` and install JAX dependencies manually — see [Development](#development-no-fortran-compiler-needed).
+The following versions are known to work together (tested on CPU, Python 3.12):
+
+| Package | Tested version | Role |
+|---------|---------------|------|
+| `jax` | 0.9.2 | Core |
+| `jaxlib` | 0.9.2 | Core |
+| `equinox` | 0.13.6 | Core |
+| `e3nn-jax` | 0.20.8 | Core |
+| `numpy` | 2.4.3 | Core |
+| `skala` (`microsoft-skala`) | 1.1.1 | Full install |
+| `torch` | 2.10.0 | Full install (via skala) |
+| `pyscf` | 2.12.1 | Full install (via skala) |
+| `e3nn` | 0.6.0 | Full install (via skala) |
+| `dftd3` | — | Full install (via skala, requires gfortran) |
+| `huggingface_hub` | 1.7.1 | Full install (via skala) |
+| `opt_einsum_fx` | 0.1.4 | Full install (via skala) |
+| `ase` | — | Full install (via skala) |
+| `qcelemental` | — | Full install (via skala) |
+
+### Cluster / custom installs
+
+To install only the JAX core without PyTorch or Fortran dependencies:
+
+```bash
+pip install --no-deps skalax
+pip install "jax>=0.4.0" "jaxlib>=0.4.0" "equinox>=0.11.0" "e3nn-jax>=0.20.0" "numpy>=1.21.0"
+```
+
+To pin specific versions for reproducibility (e.g. on a cluster):
+
+```bash
+pip install --no-deps skalax
+pip install jax==0.9.2 jaxlib==0.9.2 equinox==0.13.6 "e3nn-jax==0.20.8" numpy==2.4.3
+```
+
+For a full install with PyTorch reference and PySCF integration, see [Installation](#installation).
 
 ## Tests
 
