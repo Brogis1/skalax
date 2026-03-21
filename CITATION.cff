@@ -1,0 +1,75 @@
+cff-version: 1.2.0
+message: "If you use skalax in your research, please cite the Skala paper and this software."
+type: software
+title: "skalax: JAX implementation of the Skala neural exchange-correlation functional"
+authors:
+  - family-names: Sokolov
+    given-names: Igor O.
+version: 1.0.0
+license: MIT
+repository-code: "https://github.com/Brogis1/skalax"
+preferred-citation:
+  type: unpublished
+  authors:
+  - family-names: Luise
+    given-names: Giulia
+    orcid: 0000-0001-7373-9197
+  - family-names: Huang
+    given-names: Chin-Wei
+    orcid: 0000-0001-7179-7190
+  - family-names: Vogels
+    given-names: Thijs
+    orcid: 0000-0002-5884-4842
+  - family-names: Kooi
+    given-names: Derk P.
+    orcid: 0000-0001-9036-9722
+  - family-names: Ehlert
+    given-names: Sebastian
+    orcid: 0000-0001-7809-771X
+  - family-names: Lanius
+    given-names: Stephanie
+    orcid: 0009-0004-8212-3238
+  - family-names: Giesbertz
+    given-names: Klaas J. H.
+    orcid: 0000-0001-6380-5015
+  - family-names: Karton
+    given-names: Amir
+    orcid: 0000-0002-7981-508X
+  - family-names: Gunceler
+    given-names: Deniz
+  - family-names: Stanley
+    given-names: Megan
+  - family-names: Bruinsma
+    given-names: Wessel P.
+  - family-names: Huang
+    given-names: Lin
+  - family-names: Wei
+    given-names: Xinran
+  - family-names: Garrido Torres
+    given-names: Jose
+  - family-names: Katbashev
+    given-names: Abylay
+  - family-names: Chavez Zavaleta
+    given-names: Rodrigo
+  - family-names: Máté
+    given-names: Bálint
+  - family-names: Sordillo
+    given-names: Roberto
+  - family-names: Chen
+    given-names: Yingrong
+  - family-names: Williams-Young
+    given-names: David B.
+  - family-names: Bishop
+    given-names: Christopher M.
+  - family-names: Hermann
+    given-names: Jan
+    orcid: 0000-0002-2779-0749
+  - family-names: van den Berg
+    given-names: Rianne
+    orcid: 0000-0001-5076-2802
+  - family-names: Gori-Giorgi
+    given-names: Paola
+    orcid: 0000-0002-5952-1172
+  title: Accurate and scalable exchange-correlation with deep learning
+  url: https://arxiv.org/abs/2506.14665
+  year: 2025

@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skalax"
+version = "1.0.0"
+description = "JAX implementation of the Skala neural exchange-correlation functional"
+authors = [
+    {name = "Igor O. Sokolov"},
+]
+license-files = ["LICENSE.txt"]
+readme = "README.md"
+keywords = ["DFT", "quantum chemistry", "JAX", "machine learning", "XC functional"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "jax>=0.4.0",
+    "jaxlib>=0.4.0",
+    "equinox>=0.11.0",
+    "e3nn-jax>=0.20.0",
+    "numpy>=1.21.0",
+    "skala>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "torch>=2.0.0",
+    "e3nn>=0.5.0",
+    "opt_einsum_fx>=0.1.4",
+    "huggingface_hub>=0.20.0",
+]
+
+[project.urls]
+repository = "https://github.com/Brogis1/skalax"
+"Bug Tracker" = "https://github.com/Brogis1/skalax/issues"
+
+[tool.setuptools.packages.find]
+include = ["skalax*"]
+
+[tool.setuptools.package-data]
+skalax = ["weights/*.npz", "weights/*.json", "py.typed"]
+
+[tool.ruff]
+target-version = "py310"
+src = ["."]
+
+[tool.ruff.lint]
+extend-select = [
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:`torch.jit.script` is not supported in Python 3.14:DeprecationWarning",
+    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.load` is not supported in Python 3.14:DeprecationWarning",
+    "ignore:`torch.jit.load` is deprecated:DeprecationWarning",
+    "ignore:The TorchScript type system doesn't support instance-level annotations:UserWarning",
+]

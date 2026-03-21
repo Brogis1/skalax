@@ -1,0 +1,6 @@
+{
+  "lmax": 3,
+  "non_local": true,
+  "non_local_hidden_nf": 16,
+  "radius_cutoff": 5.0
+}
