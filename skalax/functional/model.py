@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: MIT
-"""
-Main model implementation for Skala JAX.
+"""Skala functional model: ``SkalaFunctional`` and friends."""
 
-Contains SkalaFunctional, NonLocalModel, and TensorProduct classes.
-"""
-
-from typing import Optional
 import math
 
 import jax
@@ -26,11 +21,11 @@ from skalax.utils.scatter import scatter_sum
 
 
 class TensorProduct(eqx.Module):
-    """
-    Equivariant tensor product with learnable weights.
+    """Equivariant tensor product with learnable weights per valid path.
 
-    Implements the same tensor product as the PyTorch e3nn version,
-    with weights for each valid (i_1, i_2, i_out) instruction.
+    Mirrors the PyTorch ``e3nn`` ``FullyConnectedTensorProduct`` used by Skala:
+    one weight tensor of shape ``(mul_1, mul_2, mul_out)`` for each allowed
+    ``(i_1, i_2, i_out)`` instruction where ``ir_out in ir_1 * ir_2``.
     """
 
     irreps_in1: e3nn.Irreps = eqx.field(static=True)
@@ -39,10 +34,9 @@ class TensorProduct(eqx.Module):
     instructions: list = eqx.field(static=True)
     slices: list = eqx.field(static=True)
 
-    # Learnable weights stored as a dict
     weights: dict
-
-    # Wigner 3j coefficients (not trainable, but not static to avoid warnings)
+    # Wigner 3j coefficients. Not trainable, but kept as a pytree leaf (not
+    # static) so loaded buffers can replace them via ``eqx.tree_at``.
     w3j: dict
 
     def __init__(
@@ -53,42 +47,26 @@ class TensorProduct(eqx.Module):
         *,
         key: jax.Array,
     ):
-        """
-        Initialize tensor product.
-
-        Parameters
-        ----------
-        irreps_in1 : Irreps
-            First input irreps.
-        irreps_in2 : Irreps
-            Second input irreps (typically spherical harmonics).
-        irreps_out : Irreps
-            Output irreps.
-        key : jax.Array
-            PRNG key for weight initialization.
-        """
         self.irreps_in1 = irreps_in1
         self.irreps_in2 = irreps_in2
         self.irreps_out = irreps_out
 
-        # Build instructions: (i_1, i_2, i_out) where ir_out in ir_1 * ir_2
         instructions = []
-        for i_1, (mul_1, ir_1) in enumerate(irreps_in1):
-            for i_2, (mul_2, ir_2) in enumerate(irreps_in2):
-                for i_out, (mul_out, ir_out) in enumerate(irreps_out):
+        for i_1, (_, ir_1) in enumerate(irreps_in1):
+            for i_2, (_, ir_2) in enumerate(irreps_in2):
+                for i_out, (_, ir_out) in enumerate(irreps_out):
                     if ir_out in ir_1 * ir_2:
                         instructions.append((i_1, i_2, i_out))
         self.instructions = instructions
 
-        # Compute slices for each irrep
         def compute_slices(irreps):
-            slices = []
+            out = []
             start = 0
             for mul, ir in irreps:
                 end = start + mul * ir.dim
-                slices.append((start, end))
+                out.append((start, end))
                 start = end
-            return slices
+            return out
 
         self.slices = [
             compute_slices(irreps_in1),
@@ -96,72 +74,59 @@ class TensorProduct(eqx.Module):
             compute_slices(irreps_out),
         ]
 
-        # Initialize weights
+        # One subkey per instruction so init is deterministic from ``key``.
+        subkeys = jax.random.split(key, len(instructions))
+
         weights = {}
         w3j = {}
-        for i_1, i_2, i_out in instructions:
+        for subkey, (i_1, i_2, i_out) in zip(
+            subkeys, instructions, strict=True,
+        ):
             mul_1, ir_1 = irreps_in1[i_1]
             mul_2, ir_2 = irreps_in2[i_2]
             mul_out, ir_out = irreps_out[i_out]
 
-            # Weight shape: (mul_1, mul_2, mul_out)
-            key, subkey = jax.random.split(key)
-            w = jax.random.normal(subkey, (mul_1, mul_2, mul_out))
-            weights[f"weight_{i_1}_{i_2}_{i_out}"] = w
+            # He-like scaling: bound ~ sqrt(6 / (fan_in + fan_out)) summed
+            # over all paths feeding the same output irrep.
+            num_in = sum(
+                self.irreps_in1[j[0]].mul * self.irreps_in2[j[1]].mul
+                for j in instructions
+                if j[2] == i_out
+            )
+            num_out = self.irreps_out[i_out].mul
+            bound = (6 / (num_in + num_out)) ** 0.5
 
-            # Wigner 3j coefficient
+            weights[f"weight_{i_1}_{i_2}_{i_out}"] = jax.random.uniform(
+                subkey,
+                (mul_1, mul_2, mul_out),
+                minval=-bound,
+                maxval=bound,
+            )
+
             w3j_val = e3nn.clebsch_gordan(ir_1.l, ir_2.l, ir_out.l)
-            # Permute from (j, i, k) to (k, i, j) to match PyTorch o3.wigner_3j
-            w3j_val = jnp.transpose(w3j_val, (2, 0, 1))
-            w3j[f"w3j_{i_1}_{i_2}_{i_out}"] = w3j_val
+            # Permute (j, i, k) -> (k, i, j) to match ``torch e3nn``'s
+            # ``o3.wigner_3j`` convention.
+            w3j[f"w3j_{i_1}_{i_2}_{i_out}"] = jnp.transpose(
+                w3j_val, (2, 0, 1)
+            )
 
         self.weights = weights
         self.w3j = w3j
 
-        # Reset parameters to match PyTorch initialization
-        self.weights = self._reset_parameters(self.weights)
-
-    def _reset_parameters(self, weights: dict) -> dict:
-        """Initialize weights with proper scaling."""
-        new_weights = {}
-        for ins in self.instructions:
-            i_1, i_2, i_out = ins
-
-            # Count number of paths feeding into this output
-            num_in = sum(
-                self.irreps_in1[ins_[0]].mul * self.irreps_in2[ins_[1]].mul
-                for ins_ in self.instructions
-                if ins_[2] == ins[2]
-            )
-            num_out = self.irreps_out[ins[2]].mul
-            x = (6 / (num_in + num_out)) ** 0.5
-
-            key_name = f"weight_{i_1}_{i_2}_{i_out}"
-            shape = weights[key_name].shape
-            new_weights[key_name] = jax.random.uniform(
-                jax.random.PRNGKey(hash(key_name) % (2**31)),
-                shape,
-                minval=-x,
-                maxval=x,
-            )
-
-        return new_weights
-
     def __call__(self, x1: jax.Array, x2: jax.Array) -> jax.Array:
-        """
-        Apply tensor product.
+        """Contract ``x1`` and ``x2`` over all valid paths.
 
         Parameters
         ----------
         x1 : Array
-            First input, shape (m, irreps_in1.dim).
+            Shape ``(m, irreps_in1.dim)``.
         x2 : Array
-            Second input, shape (m, irreps_in2.dim).
+            Shape ``(m, irreps_in2.dim)``.
 
         Returns
         -------
         Array
-            Output, shape (m, irreps_out.dim).
+            Shape ``(m, irreps_out.dim)``.
         """
         m = x1.shape[0]
         outs = []
@@ -173,7 +138,6 @@ class TensorProduct(eqx.Module):
 
             l1, l2, l3 = ir_1.l, ir_2.l, ir_out.l
 
-            # Slice inputs
             s1_start, s1_end = self.slices[0][i_1]
             s2_start, s2_end = self.slices[1][i_2]
             x1_i = x1[:, s1_start:s1_end]
@@ -182,26 +146,23 @@ class TensorProduct(eqx.Module):
             w = self.weights[f"weight_{i_1}_{i_2}_{i_out}"]
             w3j = self.w3j[f"w3j_{i_1}_{i_2}_{i_out}"]
 
-            # Compute tensor product based on l values
+            # Specialize by angular momentum to avoid materializing w3j when
+            # possible. Normalizations match the PyTorch reference.
             if (l1, l2, l3) == (0, 0, 0):
-                # Scalar x Scalar -> Scalar
                 out = jnp.einsum("mu,uvw,mv->mw", x1_i, w, x2_i)
             elif l1 == 0:
-                # Scalar x Vector -> Vector
                 x2_view = x2_i.reshape(m, mul_2, ir_2.dim)
                 out = jnp.einsum(
                     "mu,uvw,mvj->mwj", x1_i, w, x2_view
                 ).reshape(m, mul_out * ir_out.dim)
                 out = out / math.sqrt(ir_out.dim)
             elif l2 == 0:
-                # Vector x Scalar -> Vector
                 x1_view = x1_i.reshape(m, mul_1, ir_1.dim)
                 out = jnp.einsum(
                     "mui,uvw,mv->mwi", x1_view, w, x2_i
                 ).reshape(m, mul_out * ir_out.dim)
                 out = out / math.sqrt(ir_out.dim)
             elif l3 == 0:
-                # Vector x Vector -> Scalar
                 x1_view = x1_i.reshape(m, mul_1, ir_1.dim)
                 x2_view = x2_i.reshape(m, mul_2, ir_2.dim)
                 out = jnp.einsum(
@@ -209,7 +170,6 @@ class TensorProduct(eqx.Module):
                 )
                 out = out / math.sqrt(ir_1.dim)
             else:
-                # General case with Wigner 3j
                 x1_view = x1_i.reshape(m, mul_1, ir_1.dim)
                 x2_view = x2_i.reshape(m, mul_2, ir_2.dim)
                 out = jnp.einsum(
@@ -218,9 +178,8 @@ class TensorProduct(eqx.Module):
 
             outs.append((i_out, out))
 
-        # Sum outputs for each i_out
         result_parts = []
-        for i_out, (mul, ir) in enumerate(self.irreps_out):
+        for i_out, (mul, _) in enumerate(self.irreps_out):
             if mul > 0:
                 parts = [out for idx, out in outs if idx == i_out]
                 if parts:
@@ -228,15 +187,16 @@ class TensorProduct(eqx.Module):
 
         if len(result_parts) > 1:
             return jnp.concatenate(result_parts, axis=-1)
-        else:
-            return result_parts[0]
+        return result_parts[0]
 
 
 class NonLocalModel(eqx.Module):
-    """
-    Non-local model for message passing between grid points.
+    """Equivariant message passing between fine grid points and atomic centers.
 
-    Uses spherical harmonics and tensor products for equivariant processing.
+    The fine grid sends messages (``tp_down``) to coarse atomic centers, which
+    broadcast back (``tp_up``) to the fine grid. Both steps use spherical
+    harmonics up to ``lmax`` and an exponential radial basis. A
+    ``radius_cutoff`` limits the neighbor set; edges beyond it are dropped.
     """
 
     input_nf: int = eqx.field(static=True)
@@ -263,57 +223,37 @@ class NonLocalModel(eqx.Module):
         *,
         key: jax.Array,
     ):
-        """
-        Initialize non-local model.
-
-        Parameters
-        ----------
-        input_nf : int
-            Number of input features.
-        hidden_nf : int
-            Number of hidden features.
-        lmax : int
-            Maximum angular momentum.
-        radius_cutoff : float
-            Cutoff radius for interactions.
-        key : jax.Array
-            PRNG key.
-        """
         self.input_nf = input_nf
         self.hidden_nf = hidden_nf
         self.lmax = lmax
         self.radius_cutoff = radius_cutoff
 
-        # Irreps
         self.in_irreps = e3nn.Irreps(f"{hidden_nf}x0e")
         self.out_irreps = e3nn.Irreps(f"{hidden_nf}x0e")
         self.hidden_irreps = e3nn.Irreps(
-            "+".join([f"{hidden_nf}x{i}e" for i in range(lmax + 1)])
+            "+".join(f"{hidden_nf}x{ell}e" for ell in range(lmax + 1))
         )
         self.sph_irreps = e3nn.Irreps.spherical_harmonics(lmax, p=1)
 
-        # Split keys
-        key, k1, k2, k3, k4 = jax.random.split(key, 5)
-
-        # Pre-down layer
-        self.pre_down_linear = eqx.nn.Linear(input_nf, hidden_nf, key=k1)
-
-        # Tensor products
+        k_pre, k_tp_down, k_tp_up, k_post = jax.random.split(key, 4)
+        self.pre_down_linear = eqx.nn.Linear(
+            input_nf, hidden_nf, key=k_pre,
+        )
         self.tp_down = TensorProduct(
             self.in_irreps,
             self.sph_irreps,
             self.hidden_irreps,
-            key=k2,
+            key=k_tp_down,
         )
         self.tp_up = TensorProduct(
             self.hidden_irreps,
             self.sph_irreps,
             self.out_irreps,
-            key=k3,
+            key=k_tp_up,
         )
-
-        # Post-up layer
-        self.post_up_linear = eqx.nn.Linear(hidden_nf, hidden_nf, key=k4)
+        self.post_up_linear = eqx.nn.Linear(
+            hidden_nf, hidden_nf, key=k_post,
+        )
 
     def __call__(
         self,
@@ -322,79 +262,70 @@ class NonLocalModel(eqx.Module):
         coarse_coords: jax.Array,
         grid_weights: jax.Array,
     ) -> jax.Array:
-        """
-        Forward pass (JIT-compatible).
+        """Forward pass (JIT-safe via padded-sparse edges).
 
-        Uses a padded-sparse approach: edge indices are allocated at the
-        static upper-bound size ``num_fine * num_coarse`` and unused
-        (padding) entries are zeroed out via an edge mask.  All tensor
-        shapes are therefore statically known, making this method safe
-        to use inside ``jax.jit``.
+        The edge list is allocated at the static upper bound
+        ``num_fine * num_coarse`` and padding entries are zeroed out via an
+        edge mask, so all shapes are known at trace time.
 
         Parameters
         ----------
         h : Array
-            Input features, shape (num_fine, input_nf).
+            Fine-grid features, shape ``(num_fine, input_nf)``.
         grid_coords : Array
-            Fine grid coordinates, shape (num_fine, 3).
+            Fine-grid coordinates, shape ``(num_fine, 3)``.
         coarse_coords : Array
-            Coarse grid coordinates, shape (num_coarse, 3).
+            Coarse-grid (atomic) coordinates, shape ``(num_coarse, 3)``.
         grid_weights : Array
-            Grid weights, shape (num_fine,).
+            Fine-grid integration weights, shape ``(num_fine,)``.
 
         Returns
         -------
         Array
-            Output features, shape (num_fine, hidden_nf).
+            Updated fine-grid features, shape ``(num_fine, hidden_nf)``.
         """
-        # Pre-down layer (batched matmul)
         h = jax.nn.silu(
             h @ self.pre_down_linear.weight.T + self.pre_down_linear.bias
         )
 
-        # Compute distances and directions
         directions, distances = vect_cdist(grid_coords, coarse_coords)
 
-        # Envelope for normalization
         if self.radius_cutoff != float("inf"):
             up_weight = normalization_envelope(distances, self.radius_cutoff)
         else:
             up_weight = jnp.ones_like(distances)
 
-        # --- Padded-sparse edge construction (JIT-safe) ---
         num_fine, num_coarse = distances.shape
         max_edges = num_fine * num_coarse
         radius_mask = distances <= self.radius_cutoff
 
-        # Static-size edge list; padding entries filled with index 0
-        # jnp.argwhere places real entries first, padding at the end.
-        edge_indices = jnp.argwhere(radius_mask, size=max_edges, fill_value=0)
+        # argwhere places real entries first and pads with (0, 0); a plain
+        # mask lookup on (0, 0) would be ambiguous if that pair is also a
+        # real edge, so we build the mask from the known count of real edges.
+        edge_indices = jnp.argwhere(
+            radius_mask, size=max_edges, fill_value=0,
+        )
         edge_fine_idx = edge_indices[:, 0]
         edge_coarse_idx = edge_indices[:, 1]
 
-        # 1 for real edges, 0 for padding.
-        # Cannot use radius_mask[edge_fine_idx, edge_coarse_idx] because the
-        # fill index (0,0) may itself be within the cutoff radius.  Instead,
-        # rely on argwhere's ordering guarantee: the first n_real entries are
-        # real, the rest are padding.
         n_real = radius_mask.sum()
         edge_mask = (jnp.arange(max_edges) < n_real).astype(h.dtype)
 
-        # Gather using static-shape indices
         edge_directions = directions[edge_fine_idx, edge_coarse_idx]
         edge_distances = distances[edge_fine_idx, edge_coarse_idx]
-        up_weight_edges = up_weight[edge_fine_idx, edge_coarse_idx] * edge_mask
+        up_weight_edges = (
+            up_weight[edge_fine_idx, edge_coarse_idx] * edge_mask
+        )
 
-        # Radial features (mask out padding)
         edge_dist_ft = exp_radial_func(edge_distances, self.hidden_nf)
         edge_dist_ft = edge_dist_ft * edge_mask[:, None]
 
-        # Envelope for smoothness
         if self.radius_cutoff != float("inf"):
-            envelope = polynomial_envelope(edge_distances, self.radius_cutoff, 8)
+            envelope = polynomial_envelope(
+                edge_distances, self.radius_cutoff, 8,
+            )
             edge_dist_ft = edge_dist_ft * envelope[:, None]
 
-        # Spherical harmonics
         edge_direction_ft = e3nn.spherical_harmonics(
             self.sph_irreps,
             edge_directions,
@@ -403,12 +334,11 @@ class NonLocalModel(eqx.Module):
         ).array
         edge_direction_ft = edge_direction_ft * edge_mask[:, None]
 
-        # Process fine -> coarse
+        # Fine -> coarse.
         edge_h = h[edge_fine_idx]
         down = self.tp_down(edge_h, edge_direction_ft)
         down = self._mul_repeat(edge_dist_ft, down, self.hidden_irreps)
 
-        # Scatter to coarse points
         down_weighted = (
             down.astype(jnp.float64)
             * grid_weights[edge_fine_idx, None].astype(jnp.float64)
@@ -420,23 +350,25 @@ class NonLocalModel(eqx.Module):
             dim_size=coarse_coords.shape[0],
         ).astype(h.dtype)
 
-        # Process coarse -> fine
+        # Coarse -> fine.
         edge_coarse_ft = h_coarse[edge_coarse_idx]
         up = self.tp_up(edge_coarse_ft, edge_direction_ft)
 
-        # Compute normalization
         denom = scatter_sum(
             up_weight_edges,
             edge_fine_idx,
             dim=0,
             dim_size=grid_coords.shape[0],
         )[edge_fine_idx]
+        # 0.1 regularizer keeps the division well-conditioned where the
+        # envelope is nearly zero; matches the PyTorch reference.
         up_weight_normalized = up_weight_edges / (denom + 0.1)
         up = self._mul_repeat(
-            edge_dist_ft * up_weight_normalized[:, None], up, self.out_irreps
+            edge_dist_ft * up_weight_normalized[:, None],
+            up,
+            self.out_irreps,
         )
 
-        # Scatter back to fine points
         h_fine = scatter_sum(
             up,
             edge_fine_idx,
@@ -444,76 +376,54 @@ class NonLocalModel(eqx.Module):
             dim_size=grid_coords.shape[0],
         )
 
-        # Post-up layer (batched matmul)
         h_fine = jax.nn.silu(
             h_fine @ self.post_up_linear.weight.T + self.post_up_linear.bias
         )
 
         return h_fine
 
-    def _forward_eager(
+    def forward_eager(
         self,
         h: jax.Array,
         grid_coords: jax.Array,
         coarse_coords: jax.Array,
         grid_weights: jax.Array,
     ) -> jax.Array:
+        """Reference forward pass using data-dependent shapes.
+
+        This path uses boolean indexing (``distances <= radius_cutoff``) and
+        is therefore **not** ``jax.jit``-compatible. It's kept as a readable
+        reference and a debugging aid: the JIT-safe ``__call__`` above should
+        reproduce its output exactly.
         """
-        Forward pass (original eager implementation, not JIT-compatible).
-
-        Uses boolean indexing and data-dependent shapes.  Kept for
-        reference and testing against the JIT-compatible ``__call__``.
-
-        Parameters
-        ----------
-        h : Array
-            Input features, shape (num_fine, input_nf).
-        grid_coords : Array
-            Fine grid coordinates, shape (num_fine, 3).
-        coarse_coords : Array
-            Coarse grid coordinates, shape (num_coarse, 3).
-        grid_weights : Array
-            Grid weights, shape (num_fine,).
-
-        Returns
-        -------
-        Array
-            Output features, shape (num_fine, hidden_nf).
-        """
-        # Pre-down layer (batched matmul)
         h = jax.nn.silu(
             h @ self.pre_down_linear.weight.T + self.pre_down_linear.bias
         )
 
-        # Compute distances and directions
         directions, distances = vect_cdist(grid_coords, coarse_coords)
 
-        # Envelope for normalization
         if self.radius_cutoff != float("inf"):
             up_weight = normalization_envelope(distances, self.radius_cutoff)
         else:
             up_weight = jnp.ones_like(distances)
 
-        # Find edges within radius cutoff
         radius_mask = distances <= self.radius_cutoff
         edge_directions = directions[radius_mask]
         edge_distances = distances[radius_mask]
         up_weight_edges = up_weight[radius_mask]
 
-        # Get edge indices
         edge_indices = jnp.argwhere(radius_mask, size=radius_mask.sum())
         edge_fine_idx = edge_indices[:, 0]
         edge_coarse_idx = edge_indices[:, 1]
 
-        # Radial features
         edge_dist_ft = exp_radial_func(edge_distances, self.hidden_nf)
 
-        # Envelope for smoothness
         if self.radius_cutoff != float("inf"):
-            envelope = polynomial_envelope(edge_distances, self.radius_cutoff, 8)
+            envelope = polynomial_envelope(
+                edge_distances, self.radius_cutoff, 8,
+            )
             edge_dist_ft = edge_dist_ft * envelope[:, None]
 
-        # Spherical harmonics
         edge_direction_ft = e3nn.spherical_harmonics(
             self.sph_irreps,
             edge_directions,
@@ -521,12 +431,10 @@ class NonLocalModel(eqx.Module):
             normalization="norm",
         ).array
 
-        # Process fine -> coarse
         edge_h = h[edge_fine_idx]
         down = self.tp_down(edge_h, edge_direction_ft)
         down = self._mul_repeat(edge_dist_ft, down, self.hidden_irreps)
 
-        # Scatter to coarse points
         down_weighted = (
             down.astype(jnp.float64)
             * grid_weights[edge_fine_idx, None].astype(jnp.float64)
@@ -538,11 +446,9 @@ class NonLocalModel(eqx.Module):
             dim_size=coarse_coords.shape[0],
         ).astype(h.dtype)
 
-        # Process coarse -> fine
         edge_coarse_ft = h_coarse[edge_coarse_idx]
         up = self.tp_up(edge_coarse_ft, edge_direction_ft)
 
-        # Compute normalization
         denom = scatter_sum(
             up_weight_edges,
             edge_fine_idx,
@@ -551,10 +457,11 @@ class NonLocalModel(eqx.Module):
         )[edge_fine_idx]
         up_weight_normalized = up_weight_edges / (denom + 0.1)
         up = self._mul_repeat(
-            edge_dist_ft * up_weight_normalized[:, None], up, self.out_irreps
+            edge_dist_ft * up_weight_normalized[:, None],
+            up,
+            self.out_irreps,
         )
 
-        # Scatter back to fine points
         h_fine = scatter_sum(
             up,
             edge_fine_idx,
@@ -562,7 +469,6 @@ class NonLocalModel(eqx.Module):
             dim_size=grid_coords.shape[0],
         )
 
-        # Post-up layer (batched matmul)
         h_fine = jax.nn.silu(
             h_fine @ self.post_up_linear.weight.T + self.post_up_linear.bias
         )
@@ -571,9 +477,11 @@ class NonLocalModel(eqx.Module):
 
     @staticmethod
     def _mul_repeat(
-        mul_by: jax.Array, edge_attrs: jax.Array, irreps: e3nn.Irreps
+        mul_by: jax.Array,
+        edge_attrs: jax.Array,
+        irreps: e3nn.Irreps,
     ) -> jax.Array:
-        """Multiply edge attributes by channels per irrep."""
+        """Broadcast-multiply per-irrep scalars into an irreps tensor."""
         mul_by_shape = mul_by.shape[:-1]
         parts = []
 
@@ -583,18 +491,49 @@ class NonLocalModel(eqx.Module):
             chunk = edge_attrs[..., start:end]
             chunk_view = chunk.reshape(*mul_by_shape, mul, ir.dim)
             product = mul_by[..., None] * chunk_view
-            result = product.reshape(*mul_by_shape, -1)
-            parts.append(result)
+            parts.append(product.reshape(*mul_by_shape, -1))
             start = end
 
         return jnp.concatenate(parts, axis=-1)
 
 
 class SkalaFunctional(eqx.Module):
-    """
-    Skala neural exchange-correlation functional.
+    """JAX/Equinox implementation of the Skala neural XC functional.
 
-    JAX/Equinox implementation equivalent to the PyTorch version.
+    Given a dictionary of molecular features on a DFT integration grid,
+    ``get_exc_density`` returns a per-point exchange-correlation energy
+    density (in Hartree) and ``get_exc`` integrates it against the grid
+    weights to give the total XC energy.
+
+    With weights loaded from the bundled PyTorch checkpoint, this model
+    reproduces the PyTorch Skala reference to machine precision on a
+    fixed feature dictionary (see the ``Numerical Equivalence`` section
+    of the README). Through ``skalax.pyscf`` it can also drive PySCF DFT
+    calculations end-to-end; some divergence from the PyTorch Skala PySCF
+    integration is expected there because the feature pipeline round-trips
+    through a custom autograd bridge.
+
+    Parameters
+    ----------
+    lmax : int
+        Maximum angular momentum for the non-local spherical-harmonic basis.
+    non_local : bool
+        Enable the equivariant non-local branch.
+    non_local_hidden_nf : int
+        Width of the non-local message-passing layers.
+    radius_cutoff : float
+        Cutoff distance (Bohr) for fine-to-coarse neighbor edges.
+    key : jax.Array
+        PRNG key. The loaded weights replace the initialized values, so the
+        key only matters when training from scratch.
+
+    Notes
+    -----
+    The input ``mol`` dictionary must contain keys ``density`` (shape
+    ``(2, n_points)``), ``grad`` (``(2, 3, n_points)``), ``kin``
+    (``(2, n_points)``), ``grid_coords`` (``(n_points, 3)``),
+    ``grid_weights`` (``(n_points,)``) and ``coarse_0_atomic_coords``
+    (``(n_atoms, 3)``). Coordinates are in Bohr.
     """
 
     num_scalar_features: int = eqx.field(static=True)
@@ -603,14 +542,11 @@ class SkalaFunctional(eqx.Module):
     lmax: int = eqx.field(static=True)
     num_non_local_contributions: int = eqx.field(static=True)
 
-    # Input model layers
     input_linear1: eqx.nn.Linear
     input_linear2: eqx.nn.Linear
 
-    # Non-local model (optional)
-    non_local_model: Optional[NonLocalModel]
+    non_local_model: NonLocalModel | None
 
-    # Output model layers
     output_linear1: eqx.nn.Linear
     output_linear2: eqx.nn.Linear
     output_linear3: eqx.nn.Linear
@@ -626,44 +562,23 @@ class SkalaFunctional(eqx.Module):
         *,
         key: jax.Array,
     ):
-        """
-        Initialize Skala functional.
-
-        Parameters
-        ----------
-        lmax : int
-            Maximum angular momentum for spherical harmonics.
-        non_local : bool
-            Whether to include non-local contributions.
-        non_local_hidden_nf : int
-            Number of hidden features in non-local model.
-        radius_cutoff : float
-            Cutoff radius for non-local interactions.
-        key : jax.Array
-            PRNG key.
-        """
         self.num_scalar_features = 7
         self.non_local = non_local
         self.lmax = lmax
         self.num_feats = 256
+        self.num_non_local_contributions = (
+            non_local_hidden_nf if non_local else 0
+        )
 
-        if non_local:
-            self.num_non_local_contributions = non_local_hidden_nf
-        else:
-            self.num_non_local_contributions = 0
-
-        # Split keys
         keys = jax.random.split(key, 7)
 
-        # Input model
         self.input_linear1 = eqx.nn.Linear(
-            self.num_scalar_features, self.num_feats, key=keys[0]
+            self.num_scalar_features, self.num_feats, key=keys[0],
         )
         self.input_linear2 = eqx.nn.Linear(
-            self.num_feats, self.num_feats, key=keys[1]
+            self.num_feats, self.num_feats, key=keys[1],
         )
 
-        # Non-local model
         if non_local:
             self.non_local_model = NonLocalModel(
                 input_nf=self.num_feats,
@@ -675,103 +590,85 @@ class SkalaFunctional(eqx.Module):
         else:
             self.non_local_model = None
 
-        # Output model
         output_in = self.num_feats + self.num_non_local_contributions
         self.output_linear1 = eqx.nn.Linear(
-            output_in, self.num_feats, key=keys[3]
+            output_in, self.num_feats, key=keys[3],
         )
         self.output_linear2 = eqx.nn.Linear(
-            self.num_feats, self.num_feats, key=keys[4]
+            self.num_feats, self.num_feats, key=keys[4],
         )
         self.output_linear3 = eqx.nn.Linear(
-            self.num_feats, self.num_feats, key=keys[5]
+            self.num_feats, self.num_feats, key=keys[5],
         )
-        self.output_linear4 = eqx.nn.Linear(self.num_feats, 1, key=keys[6])
+        self.output_linear4 = eqx.nn.Linear(
+            self.num_feats, 1, key=keys[6],
+        )
         self.output_activation = ScaledSigmoid(scale=2.0)
 
     def _input_model(self, x: jax.Array) -> jax.Array:
-        """Apply input model (batched)."""
-        # Equinox Linear expects unbatched input, so we use manual matmul
-        x = jax.nn.silu(x @ self.input_linear1.weight.T + self.input_linear1.bias)
-        x = jax.nn.silu(x @ self.input_linear2.weight.T + self.input_linear2.bias)
+        # Manual matmul so the MLP runs on stacked grid points without
+        # per-point vmap over eqx.nn.Linear.
+        x = jax.nn.silu(
+            x @ self.input_linear1.weight.T + self.input_linear1.bias
+        )
+        x = jax.nn.silu(
+            x @ self.input_linear2.weight.T + self.input_linear2.bias
+        )
         return x
 
     def _output_model(self, x: jax.Array) -> jax.Array:
-        """Apply output model (batched)."""
-        x = jax.nn.silu(x @ self.output_linear1.weight.T + self.output_linear1.bias)
-        x = jax.nn.silu(x @ self.output_linear2.weight.T + self.output_linear2.bias)
-        x = jax.nn.silu(x @ self.output_linear3.weight.T + self.output_linear3.bias)
+        x = jax.nn.silu(
+            x @ self.output_linear1.weight.T + self.output_linear1.bias
+        )
+        x = jax.nn.silu(
+            x @ self.output_linear2.weight.T + self.output_linear2.bias
+        )
+        x = jax.nn.silu(
+            x @ self.output_linear3.weight.T + self.output_linear3.bias
+        )
         x = x @ self.output_linear4.weight.T + self.output_linear4.bias
-        x = self.output_activation(x)
-        return x
+        return self.output_activation(x)
 
-    def get_exc_density(self, mol: dict[str, jax.Array]) -> jax.Array:
-        """
-        Compute exchange-correlation energy density.
+    def get_exc_density(
+        self, mol: dict[str, jax.Array],
+    ) -> jax.Array:
+        """Per-point XC energy density, shape ``(n_points,)``.
 
-        Parameters
-        ----------
-        mol : dict
-            Dictionary containing molecular features.
-
-        Returns
-        -------
-        Array
-            XC energy density, shape (num_grid_points,).
+        See the class docstring for the expected keys of ``mol``.
         """
         grid_coords = mol["grid_coords"]
         grid_weights = mol["grid_weights"]
         coarse_coords = mol["coarse_0_atomic_coords"]
         features_ab, features_ba = prepare_features(mol)
 
-        # Learned symmetrized features
+        # Symmetrize over the two spin orderings.
         spin_feats = jnp.concatenate([features_ab, features_ba], axis=0)
         spin_feats = spin_feats.astype(self.dtype)
         spin_feats = self._input_model(spin_feats)
-
-        # Average AB and BA
         ab, ba = jnp.split(spin_feats, 2, axis=0)
         features = (ab + ba) / 2
 
-        # Non-local model
         if self.non_local and self.non_local_model is not None:
-            h_grid_non_local = self.non_local_model(
-                features,
-                grid_coords,
-                coarse_coords,
-                grid_weights,
+            h_nl = self.non_local_model(
+                features, grid_coords, coarse_coords, grid_weights,
             )
-            # Multiply by exp(-density)
+            # Damp the non-local contribution in high-density regions.
             density_sum = mol["density"].sum(0).reshape(-1, 1)
-            h_grid_non_local = h_grid_non_local * jnp.exp(-density_sum).astype(
-                self.dtype
-            )
-            features = jnp.concatenate([features, h_grid_non_local], axis=-1)
+            h_nl = h_nl * jnp.exp(-density_sum).astype(self.dtype)
+            features = jnp.concatenate([features, h_nl], axis=-1)
 
         enhancement_factor = self._output_model(features)
         return enhancement_density_inner_product(
-            enhancement_factor=enhancement_factor, density=mol["density"]
+            enhancement_factor=enhancement_factor,
+            density=mol["density"],
         )
 
     def get_exc(self, mol: dict[str, jax.Array]) -> jax.Array:
-        """
-        Compute total exchange-correlation energy.
-
-        Parameters
-        ----------
-        mol : dict
-            Dictionary containing molecular features.
-
-        Returns
-        -------
-        Array
-            Total XC energy (scalar).
-        """
+        """Total XC energy (scalar, Hartree)."""
         exc_density = self.get_exc_density(mol).astype(jnp.float64)
         grid_weights = mol["grid_weights"].astype(jnp.float64)
         return (exc_density * grid_weights).sum()
 
     @property
     def dtype(self) -> jnp.dtype:
-        """Get model dtype from first layer weight."""
         return self.input_linear1.weight.dtype

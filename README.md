@@ -4,26 +4,29 @@
 
 JAX/Equinox implementation of the [Skala](https://github.com/microsoft/skala) neural exchange-correlation functional for density functional theory (DFT) calculations.
 
+I love DFT in general and wanted to investigate the Skala functional because it was shown to be very accurate and efficient. Will make me happy if someone finds this port useful!
+If you like JAX see also this repo: https://github.com/Brogis1/jax-dft
+
 ## Overview
 
-skalax is a pure JAX port of the Skala neural XC functional. It achieves **good numerical equivalence** with the PyTorch reference (~1 kcal/mol NPE for the tested systems) and unlocks JAX-native capabilities: `jax.grad`, `jax.jit`, `jax.vmap`, and full XLA compilation.
+skalax is a pure JAX port of the Skala neural XC functional. It reproduces the PyTorch reference to within ~2 kcal/mol (due to custom JAX PySCF wrapper) NPE on the tested systems and exposes the usual JAX machinery: `jax.grad`, `jax.jit`, `jax.vmap`, with XLA compilation.
 
-The idea is to enable the use and finetuning of this functional in JAX-based DFT codes.
+The goal is to make this functional usable, finetunable and modifiable from JAX-based DFT codes.
 
 > [!WARNING]
-> Work in progress — so far tested on CPU only. No guarantees are provided. Bug reports are very welcome!
-> The PySCF JAX wrapper is not optimal hence slower than original PySCF Skala in Torch but the model is rather similar in performance during training and inference.
+> Work in progress, tested on CPU only so far.
+> The PySCF JAX wrapper I wrote is not optimal and is therefore slower than the original PySCF Skala in Torch, but the model itself is comparable in training and inference performance.
 
 
 ### Performance
 
-JAX JIT compilation (XLA) delivers comparable performance to PyTorch — and beats PyTorch at large grid sizes. All variants use `radius_cutoff=5.0` and are benchmarked in steady state (post-compilation, CPU). The considered benchmarks indicate even superior performance in JAX at large grid sizes. The next step would be to validate the performance on GPUs.
+JAX JIT (XLA) matches PyTorch on tested grid sizes. All variants use `radius_cutoff=5.0` and are benchmarked in steady state (post-compilation, CPU). GPU validation is the next step.
 
-![Performance benchmark](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/extensive_performance.png?v=2)
+<img src="https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/extensive_performance.png?v=2" alt="Performance benchmark" width="700">
 
-> **Left:** Forward pass only. **Right:** Forward + backward.
-> JAX JIT forward is ~1.4× faster than PyTorch traced at 32k grid points on CPU;
-> JAX JIT fwd+grad is ~1.6× faster than PyTorch traced fwd+backward on CPU.
+> **Left:** forward pass only. **Right:** forward + backward.
+> **Eager:** op-by-op execution (no compilation). **JIT / traced:** compiled graph; **steady state** = timed after a warm-up call, so compile cost is excluded.
+> At 32k grid points on CPU, JAX JIT forward is ~1.4× faster than PyTorch traced, and JAX JIT fwd+grad is ~1.6× faster than PyTorch traced fwd+backward.
 
 ## Installation
 
@@ -92,7 +95,7 @@ print(f"E_xc = {E_xc:.10f} Ha")
 ### JAX Autodiff
 
 ```python
-# Gradient of E_xc with respect to all inputs — one line
+# Gradient of E_xc with respect to all inputs in one line
 grads = jax.grad(model.get_exc)(mol)
 print(f"dE/d(density): {grads['density'].shape}")
 ```
@@ -164,24 +167,17 @@ print(f"Total energy: {energy:.8f} Ha")
 
 ## Model Architecture
 
-```
-SkalaFunctional (~276,000 parameters)
-├── input_model: Linear(7→256) → SiLU → Linear(256→256) → SiLU
-├── non_local_model: NonLocalModel (equivariant message passing)
-│   ├── pre_down_linear: Linear(256→16) → SiLU
-│   ├── tp_down: TensorProduct (e3nn, lmax=3)
-│   ├── tp_up: TensorProduct (e3nn, lmax=3)
-│   └── post_up_linear: Linear(16→16) → SiLU
-└── output_model:
-    ├── Linear(272→256) → SiLU
-    ├── Linear(256→256) → SiLU × 2
-    ├── Linear(256→1)
-    └── ScaledSigmoid(scale=2.0)
-```
+Roughly 276k parameters, in three stages:
+
+1. **Input MLP.** Per grid point, the 7 scalar features (spin densities, gradient norms, kinetic densities, and the α+β gradient norm) go through `Linear(7→256) → SiLU → Linear(256→256) → SiLU`. Spin-swapped features are pushed through the same MLP and averaged, so the model is symmetric under α↔β.
+
+2. **Non-local branch** (optional, `lmax=3`, `radius_cutoff≈5 Bohr`). The 256-dim scalar features are squeezed to 16 channels (`pre_down_linear`), then a fine→coarse tensor product (`tp_down`) aggregates to atomic centers, a coarse→fine tensor product (`tp_up`) broadcasts back to the grid, and a final `post_up_linear` (SiLU) mixes channels. Edge features use an exponential radial basis and spherical harmonics up to `lmax`. The non-local output is damped by `exp(-ρ)` and concatenated to the scalar features.
+
+3. **Output MLP.** The 256+16 dim features go through three `Linear(→256) → SiLU` layers, a final `Linear(→1)`, and a `ScaledSigmoid(scale=2.0)`. The scalar output is an enhancement factor multiplied against the LDA exchange density to give the per-point XC energy density.
 
 ## Numerical Equivalence
 
-The JAX implementation is numerically equivalent to the PyTorch reference (few test cases):
+On a handful of test cases the JAX implementation matches the PyTorch reference to machine precision:
 
 | Test | Max \|ΔE\| |
 |------|------------|
@@ -189,28 +185,34 @@ The JAX implementation is numerically equivalent to the PyTorch reference (few t
 | `get_exc` (with non-local) | 1.14e-13 Ha |
 | `get_exc_density` | 1.17e-13 Ha |
 
-Below more comprehensive benchmarks are presented.
+More comprehensive benchmarks follow below.
 
 ## Benchmarks
 
-We provide a few important tests to check the correctness of the implementation.
-Beware that the performance can be affected (positively or negatively) by the JAX PySCF wrapper I included, hence the non-perfect match with the PyTorch reference implementation.
+A few tests to check the correctness of the implementation.
+Note that results can be affected (positively or negatively) by the JAX PySCF wrapper I included, which explains the imperfect match with the PyTorch reference.
 
 ### Forward pass equivalence
 
 
-![Forward pass equivalence: relative error on total XC energy and max absolute error on per-point XC density, both well below threshold across system sizes](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/forward_equivalence.png)
+<img src="https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/forward_equivalence.png" alt="Forward pass equivalence: relative error on total XC energy and max absolute error on per-point XC density, both well below threshold across system sizes" width="500">
 
 
-### Reaction curves
+### Energy profiles
 
-The non-parallelity error (NPE) is crucial for correcness of a prediction in chemistry. Here we compare the JAX implementation with the PyTorch reference implementation:
+The non-parallelity error (NPE) is crucial for the correctness of a prediction in chemistry. Here I compare the JAX implementation against the PyTorch reference:
 
-![CH4 symmetric stretch: total energy vs C–H distance (PyTorch vs JAX) and non-parallelity error](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/ch4_stretch.png)
+Simple system:
 
-![H2 dissociation curve: total energy vs H–H distance (PyTorch vs JAX) and absolute energy difference](https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/reaction_curve.png)
+<img src="https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/reaction_curve.png" alt="H2 dissociation curve: total energy vs H-H distance (PyTorch vs JAX) and absolute energy difference" width="450">
 
-Qualitatively the results are neat considering that we used the same parameters and completely different backends (PyTorch vs JAX).
+And more challenging:
+
+<img src="https://raw.githubusercontent.com/Brogis1/skalax/main/benchmarks/plots/ch4_stretch.png" alt="CH4 symmetric stretch: total energy vs C-H distance (PyTorch vs JAX) and non-parallelity error" width="450">
+
+
+
+The curves agree well given that the two implementations share the same parameters but run on completely different backends (PyTorch vs JAX).
 
 ## Dependencies
 
@@ -261,11 +263,9 @@ pytest tests/ -v
 
 ## License
 
-MIT License — see [LICENSE.txt](LICENSE.txt).
+MIT License, see [LICENSE.txt](LICENSE.txt).
 
-The pretrained weights bundled with this package are derived from the Skala model
-originally released by Microsoft Corporation under the MIT License
-([github.com/microsoft/skala](https://github.com/microsoft/skala)).
+The pretrained weights bundled with this package are derived from the Skala model originally released by Microsoft Corporation under the MIT License ([github.com/microsoft/skala](https://github.com/microsoft/skala)).
 
 ## Citation
 
@@ -303,7 +303,7 @@ If you additionally use this JAX implementation, please also cite:
 
 ## Related Projects
 
-- [Skala (PyTorch)](https://github.com/microsoft/skala) — original PyTorch implementation
-- [e3nn-jax](https://github.com/e3nn/e3nn-jax) — equivariant neural networks for JAX
-- [Equinox](https://github.com/patrick-kidger/equinox) — JAX neural network library
-- [PySCF](https://github.com/pyscf/pyscf) — quantum chemistry in Python
+- [Skala (PyTorch)](https://github.com/microsoft/skala): original PyTorch implementation
+- [e3nn-jax](https://github.com/e3nn/e3nn-jax): equivariant neural networks for JAX
+- [Equinox](https://github.com/patrick-kidger/equinox): JAX neural network library
+- [PySCF](https://github.com/pyscf/pyscf): quantum chemistry in Python

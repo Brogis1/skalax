@@ -1,9 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""
-Utility functions for the Skala JAX model.
-
-Contains distance computations, radial basis functions, and envelope functions.
-"""
+"""Distances, radial basis functions, and cutoff envelopes used by Skala."""
 
 import math
 
@@ -12,9 +8,7 @@ import jax.numpy as jnp
 from jax import Array
 
 
-# Covalent radius constants (Angstrom to Bohr conversion)
-# 0.32 and 2.32 are the smallest and largest covalent radius estimates
-# from Pyykko and Atsumi, Chem. Eur. J. 15, 2009, 188-197
+# Covalent-radius bounds from Pyykko & Atsumi, Chem. Eur. J. 15, 2009, 188-197.
 ANGSTROM_TO_BOHR = 1.88973
 MIN_COV_RAD = 0.32 * ANGSTROM_TO_BOHR
 MAX_COV_RAD = 2.32 * ANGSTROM_TO_BOHR
@@ -38,6 +32,7 @@ def vect_cdist(c1: Array, c2: Array) -> tuple[Array, Array]:
         - dist: Distances, shape (n, m)
     """
     direction = c1[:, None] - c2[None, :]
+    # Add a tiny offset so the gradient of sqrt is finite at zero distance.
     dist = jnp.sqrt((direction**2 + 1e-20).sum(-1))
     return direction / dist[:, :, None], dist
 

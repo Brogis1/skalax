@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Functional module containing the core Skala model implementation."""
+"""Core Skala functional: layers, base utilities, and model."""
 
 from skalax.functional.layers import ScaledSigmoid, Squasher
 from skalax.functional.base import (
@@ -15,8 +15,8 @@ __all__ = [
 ]
 
 
-# Lazy imports for model classes (not yet implemented)
 def __getattr__(name):
+    # Defer importing the model (and its e3nn dependency) until needed.
     if name in ("SkalaFunctional", "NonLocalModel"):
         from skalax.functional import model
         return getattr(model, name)

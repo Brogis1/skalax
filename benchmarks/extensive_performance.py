@@ -44,7 +44,7 @@ from _utils import (
 )
 
 # Grid sizes: powers of 2 from 32 to 32768 (2^15)
-GRID_SIZES = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+GRID_SIZES = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
 N_ATOMS = 3
 N_REPEATS = 5
 N_WARMUP = 3

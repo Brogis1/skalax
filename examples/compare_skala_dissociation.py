@@ -147,7 +147,7 @@ def main():
         plt.plot(distances, results["jax"], 'g:', label='Skala (JAX)', linewidth=2)
         plt.plot(distances, results["hf"], 'b-.', label='HF', alpha=0.5)
 
-        plt.xlabel('Bond Length ($\AA$)')
+        plt.xlabel(r'Bond Length ($\AA$)')
         plt.ylabel('Energy (Hartree)')
         plt.title(f'H2 Dissociation: Skala Torch vs JAX ({basis})')
         plt.legend()

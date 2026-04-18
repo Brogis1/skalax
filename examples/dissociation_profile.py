@@ -72,7 +72,7 @@ def main():
         plt.plot(distances, skala_energies, 'r--', label='Skala', linewidth=2)
         plt.plot(distances, hf_energies, 'b:', label='Hartree-Fock', linewidth=1.5)
 
-        plt.xlabel('Bond Length ($\AA$)')
+        plt.xlabel(r'Bond Length ($\AA$)')
         plt.ylabel('Energy (Hartree)')
         plt.title(f'H2 Dissociation Profile ({basis})')
         plt.legend()

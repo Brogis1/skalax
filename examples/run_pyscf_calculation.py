@@ -11,7 +11,7 @@ Requirements:
 
 # Enable JAX 64-bit mode for numerical precision
 import jax
-jax.config.update("jax_enable_x64", True)
+jax.cåonfig.update("jax_enable_x64", True)
 
 from pyscf import gto
 

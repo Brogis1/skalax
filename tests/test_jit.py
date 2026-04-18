@@ -1,13 +1,9 @@
 # SPDX-License-Identifier: MIT
-"""
-Tests for JIT compilation of the full SkalaFunctional model (including non-local).
+"""JIT compilation tests for ``SkalaFunctional`` (including the non-local branch).
 
-Verifies that:
-1. eqx.filter_jit compiles the model without error
-2. JIT output matches eager execution
-3. JIT __call__ matches the original _forward_eager implementation
-4. JIT + jax.grad works end-to-end
-5. JIT'd model still matches PyTorch (numerical equivalence preserved)
+Checks that ``eqx.filter_jit`` compiles the model, that JIT output matches
+eager evaluation, that ``jax.grad`` composes with JIT, and that numerical
+equivalence to the PyTorch reference is preserved after compilation.
 """
 
 import numpy as np
@@ -178,51 +174,34 @@ class TestJITMatchesEager:
 
 
 class TestJITMatchesForwardEager:
-    """Test that the JIT-compatible __call__ matches _forward_eager."""
+    """``NonLocalModel.__call__`` must match ``forward_eager`` (reference)."""
 
     def test_nonlocal_call_vs_forward_eager(self, nonlocal_model_with_weights):
-        """NonLocalModel.__call__ matches _forward_eager."""
         np.random.seed(42)
         _, jax_nl = nonlocal_model_with_weights
 
         num_fine, num_coarse = 20, 3
         h = jnp.array(np.random.randn(num_fine, 256).astype(np.float64))
-        grid_coords = jnp.array(np.random.randn(num_fine, 3).astype(np.float64))
-        coarse_coords = jnp.array(np.random.randn(num_coarse, 3).astype(np.float64))
+        grid_coords = jnp.array(
+            np.random.randn(num_fine, 3).astype(np.float64)
+        )
+        coarse_coords = jnp.array(
+            np.random.randn(num_coarse, 3).astype(np.float64)
+        )
         grid_weights = jnp.array(
             (np.abs(np.random.randn(num_fine)) + 0.1).astype(np.float64)
         )
 
-        result_call = np.array(jax_nl(h, grid_coords, coarse_coords, grid_weights))
+        result_call = np.array(
+            jax_nl(h, grid_coords, coarse_coords, grid_weights)
+        )
         result_eager = np.array(
-            jax_nl._forward_eager(h, grid_coords, coarse_coords, grid_weights)
+            jax_nl.forward_eager(
+                h, grid_coords, coarse_coords, grid_weights,
+            )
         )
 
         np.testing.assert_allclose(result_call, result_eager, atol=1e-10)
-
-    def test_nonlocal_jit_call_vs_forward_eager(self, nonlocal_model_with_weights):
-        """JIT'd NonLocalModel.__call__ matches _forward_eager."""
-        np.random.seed(42)
-        _, jax_nl = nonlocal_model_with_weights
-
-        num_fine, num_coarse = 20, 3
-        h = jnp.array(np.random.randn(num_fine, 256).astype(np.float64))
-        grid_coords = jnp.array(np.random.randn(num_fine, 3).astype(np.float64))
-        coarse_coords = jnp.array(np.random.randn(num_coarse, 3).astype(np.float64))
-        grid_weights = jnp.array(
-            (np.abs(np.random.randn(num_fine)) + 0.1).astype(np.float64)
-        )
-
-        @eqx.filter_jit
-        def jit_nl(model, h, gc, cc, gw):
-            return model(h, gc, cc, gw)
-
-        result_jit = np.array(jit_nl(jax_nl, h, grid_coords, coarse_coords, grid_weights))
-        result_eager = np.array(
-            jax_nl._forward_eager(h, grid_coords, coarse_coords, grid_weights)
-        )
-
-        np.testing.assert_allclose(result_jit, result_eager, atol=1e-10)
 
 
 class TestJITGrad:

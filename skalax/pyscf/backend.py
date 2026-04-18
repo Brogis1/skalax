@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) Microsoft Corporation.
-# Copied from src/skala/pyscf/backend.py
+# Adapted from microsoft/skala (MIT); see LICENSE.txt.
 
 from typing import (
     TYPE_CHECKING,
