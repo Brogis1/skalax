@@ -1,5 +1,7 @@
 # skalax
 
+[![tests](https://github.com/Brogis1/skalax/actions/workflows/tests.yml/badge.svg)](https://github.com/Brogis1/skalax/actions/workflows/tests.yml)
+
 <img src="https://raw.githubusercontent.com/Brogis1/skalax/main/img/logo-skala.png?v=2" alt="Skalax Logo" width="400">
 
 JAX/Equinox implementation of the [Skala](https://github.com/microsoft/skala) neural exchange-correlation functional for density functional theory (DFT) calculations.
