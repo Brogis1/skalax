@@ -5,7 +5,7 @@ title: "skalax: JAX implementation of the Skala neural exchange-correlation func
 authors:
   - family-names: Sokolov
     given-names: Igor O.
-version: 1.0.0
+version: 1.0.1
 license: MIT
 repository-code: "https://github.com/Brogis1/skalax"
 preferred-citation:

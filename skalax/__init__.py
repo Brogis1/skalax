@@ -4,7 +4,7 @@
 See the README for usage examples.
 """
 
-__version__ = "0.2.0"
+__version__ = "1.0.1"
 
 from skalax.functional.model import SkalaFunctional
 from skalax.convert_weights import (
