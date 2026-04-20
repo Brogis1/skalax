@@ -8,8 +8,6 @@ pypi: https://pypi.org/project/skalax/
 
 JAX/Equinox implementation of the [Skala](https://github.com/microsoft/skala) neural exchange-correlation functional for density functional theory (DFT) calculations.
 
-I love DFT in general and wanted to investigate the Skala functional because it was shown to be very accurate and efficient. Will make me happy if someone finds this port useful!
-If you like JAX see also this repo: https://github.com/Brogis1/jax-dft
 
 ## Overview
 
