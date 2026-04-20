@@ -4,6 +4,8 @@
 
 <img src="https://raw.githubusercontent.com/Brogis1/skalax/main/img/logo-skala-small.png" alt="Skalax Logo" width="400">
 
+pypi: https://pypi.org/project/skalax/
+
 JAX/Equinox implementation of the [Skala](https://github.com/microsoft/skala) neural exchange-correlation functional for density functional theory (DFT) calculations.
 
 I love DFT in general and wanted to investigate the Skala functional because it was shown to be very accurate and efficient. Will make me happy if someone finds this port useful!
